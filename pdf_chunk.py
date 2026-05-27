@@ -204,28 +204,38 @@ def _strip_images_from_page_pypdf(page, writer):
 
 
 def _strip_images_fitz(input_path, from_page, to_page, output_path):
+    """
+    Extract pages and truly remove all images from the output so they are
+    not counted against Claude's per-conversation image budget.
+
+    Strategy: zero the image stream AND change /Subtype from /Image to /Form
+    with a 1x1 BBox. This makes the xref invisible to image-counting code
+    while keeping the PDF structurally valid. garbage=4 + clean=True on save
+    purges orphaned objects and normalises the file.
+    """
     src = fitz.open(str(input_path))
     dst = fitz.open()
     dst.insert_pdf(src, from_page=from_page - 1, to_page=to_page - 1)
     src.close()
 
     total_removed = 0
-    for page in dst:
-        imgs = page.get_images(full=True)
-        if not imgs:
-            continue
-        for img in imgs:
-            xref = img[0]
-            try:
-                rects = page.get_image_rects(xref, transform=False)
-            except TypeError:
-                rects = page.get_image_rects(xref)
-            for rect in rects:
-                page.add_redact_annot(rect, fill=(1, 1, 1))
-        page.apply_redactions(images=2, graphics=0, text=0)
-        total_removed += len(imgs)
+    seen_xrefs = set()
 
-    dst.save(str(output_path), garbage=4, deflate=True)
+    for page in dst:
+        for img in page.get_images(full=True):
+            xref = img[0]
+            if xref in seen_xrefs:
+                continue
+            seen_xrefs.add(xref)
+            try:
+                dst.update_stream(xref, b"")
+                dst.xref_set_key(xref, "Subtype", "/Form")
+                dst.xref_set_key(xref, "BBox", "[0 0 1 1]")
+                total_removed += 1
+            except Exception:
+                pass
+
+    dst.save(str(output_path), garbage=4, deflate=True, clean=True)
     dst.close()
     return total_removed
 
