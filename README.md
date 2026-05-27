@@ -1,6 +1,7 @@
 # pdf_chunk
 
 A command-line tool to extract a range of pages from a PDF and save them as a new file.
+Pass `--no-images` to strip all embedded images from the output while keeping every Figure label and caption intact.
 
 ---
 
@@ -34,13 +35,19 @@ python3 pdf_chunk.py -i STM32.pdf -f 10 -t 20 -d stm32-chunks -n chapter-one-chu
 ## Requirements
 
 - Python 3
-- [pypdf](https://pypi.org/project/pypdf/)
-
-Install the dependency:
+- [pypdf](https://pypi.org/project/pypdf/) (or PyPDF2)
 
 ```bash
 pip install pypdf
 ```
+
+For higher-quality image removal with `--no-images`, also install PyMuPDF:
+
+```bash
+pip install pymupdf
+```
+
+PyMuPDF is optional — if it's not installed the script falls back to pypdf automatically.
 
 ---
 
@@ -54,15 +61,16 @@ python3 pdf_chunk.py -i <input.pdf> -f <from_page> -t <to_page> [options]
 
 ## Flags
 
-| Flag       | Long form     | Required | Description                                                                                                                                    |
-| ---------- | ------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-i`       | `--input`     | ✅       | Path to the source PDF file                                                                                                                    |
-| `-f`       | `--from-page` | ✅       | First page to extract — use **TOC page numbers** when `--offset` is set, otherwise the physical PDF page                                      |
-| `-t`       | `--to-page`   | ✅       | Last page to extract — same numbering as `-f`                                                                                                  |
-| `-n`       | `--name`      | ❌       | Custom output filename (no extension needed)                                                                                                   |
-| `-d`       | `--dir`       | ❌       | Output directory — created automatically if it doesn't exist                                                                                   |
-| `-o`       | `--output`    | ❌       | Full output path including folder and filename — overrides `-n` and `-d` if given                                                              |
-| _(none)_   | `--offset`    | ❌       | Integer added to `-f`/`-t` to convert TOC page numbers to physical PDF pages. Use when the book's page 1 is not the PDF's first page (default: `0`) |
+| Flag       | Long form       | Required | Description                                                                                                                                         |
+| ---------- | --------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-i`       | `--input`       | ✅       | Path to the source PDF file                                                                                                                         |
+| `-f`       | `--from-page`   | ✅       | First page to extract — use **TOC page numbers** when `--offset` is set, otherwise the physical PDF page                                           |
+| `-t`       | `--to-page`     | ✅       | Last page to extract — same numbering as `-f`                                                                                                       |
+| `-n`       | `--name`        | ❌       | Custom output filename (no extension needed)                                                                                                        |
+| `-d`       | `--dir`         | ❌       | Output directory — created automatically if it doesn't exist                                                                                        |
+| `-o`       | `--output`      | ❌       | Full output path including folder and filename — overrides `-n` and `-d` if given                                                                   |
+| _(none)_   | `--offset`      | ❌       | Integer added to `-f`/`-t` to convert TOC page numbers to physical PDF pages. Use when the book's page 1 is not the PDF's first page (default: `0`) |
+| _(none)_   | `--no-images`   | ❌       | Strip all embedded images from the extracted pages. Figure labels and all other text are preserved. See [Image removal](#image-removal) below       |
 
 ---
 
@@ -80,7 +88,7 @@ python3 pdf_chunk.py -i report.pdf -f 3 -t 7
 python3 pdf_chunk.py -i report.pdf -f 1 -t 5 -n chapter_one
 ```
 
-**_Custom directory — saves as `chapter-one-chunk.pdf` inside `stm32-chunks/` (created if missing):_**
+**Custom directory** — saves as `chapter-one-chunk.pdf` inside `stm32-chunks/` (created if missing):
 
 ```bash
 python3 pdf_chunk.py -i STM32.pdf -f 10 -t 20 -d stm32-chunks -n chapter-one-chunk
@@ -128,29 +136,63 @@ python3 pdf_chunk.py -i book.pdf -f 45 -t 60 --offset 31 -d chapters -n chapter_
 
 ---
 
+## Image removal
+
+Add `--no-images` to any command to strip all embedded images from the extracted pages. Figure labels, captions, and all other text are preserved.
+
+```bash
+python3 pdf_chunk.py -i report.pdf -f 1 -t 5 --no-images
+# Output: report_pages_1-5_no_images.pdf
+```
+
+Combined with other flags:
+
+```bash
+python3 pdf_chunk.py -i book.pdf -f 10 -t 20 --offset 31 -d chapters -n ch2 --no-images
+# Output: chapters/ch2.pdf  (images stripped, text intact)
+```
+
+**Output naming with `--no-images`:**
+
+- Auto-name: `<stem>_pages_<from>-<to>_no_images.pdf`
+- When `-n` or `-o` is given: your name is used exactly (no suffix added)
+
+**Success message with `--no-images`:**
+
+```
+✓ Extracted 5 page(s) (pages 1–5 of 910, 8 image(s) removed) → report_pages_1-5_no_images.pdf
+```
+
+**How it works:**
+
+| Backend | Used when | Mechanism |
+| ------- | --------- | --------- |
+| **PyMuPDF** | `pymupdf` is installed | Locates each image's display rectangle, covers it with a white redaction annotation (`text=0` so overlapping text is never erased), then applies the redaction |
+| **pypdf / PyPDF2** | fallback | Deletes each image's XObject entry from the page's resource dictionary and strips the corresponding `Do` draw commands from the content stream |
+
+In both cases Figure labels (e.g. *"Figure 3.1 — Block diagram"*) live in the PDF's text layer, not inside the image pixels, so they survive the stripping unchanged.
+
+---
+
 ## Output Naming
 
 If no output flag is provided, the file is auto-named using the pattern:
 
 ```
-<original_name>_pages_<from>-<to>.pdf
+<original_name>_pages_<from>-<to>[_no_images].pdf
 ```
 
-For example, running on `report.pdf` with `-f 3 -t 7` produces:
-
-```
-report_pages_3-7.pdf
-```
+The `_no_images` suffix is appended only when `--no-images` is used and no custom name is given.
 
 ### Priority order
 
-| Flags used             | Result                                                                   |
-| ---------------------- | ------------------------------------------------------------------------ |
-| `-o /path/to/file.pdf` | Saves to that exact path (overrides `-n` and `-d`)                       |
-| `-d my_dir -n my_name` | Saves as `my_dir/my_name.pdf`                                            |
-| `-d my_dir`            | Saves as `my_dir/<input>_pages_<from>-<to>.pdf`                          |
-| `-n my_name`           | Saves as `my_name.pdf` in the same folder as the input                   |
-| _(none)_               | Saves as `<input>_pages_<from>-<to>.pdf` in the same folder as the input |
+| Flags used             | Result                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| `-o /path/to/file.pdf` | Saves to that exact path (overrides `-n` and `-d`)                                            |
+| `-d my_dir -n my_name` | Saves as `my_dir/my_name.pdf`                                                                 |
+| `-d my_dir`            | Saves as `my_dir/<input>_pages_<from>-<to>[_no_images].pdf`                                  |
+| `-n my_name`           | Saves as `my_name.pdf` in the same folder as the input                                        |
+| _(none)_               | Saves as `<input>_pages_<from>-<to>[_no_images].pdf` in the same folder as the input         |
 
 ---
 
